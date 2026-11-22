@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" fill="none">
+  <rect x="12" y="12" width="104" height="104" rx="22" fill="#0F172A" stroke="#334155" stroke-width="4"/>
+  <!-- Top storyboard row -->
+  <rect x="22" y="24" width="38" height="24" rx="4" fill="#1E293B" stroke="#FACC15" stroke-width="2.5"/>
+  <rect x="66" y="24" width="40" height="24" rx="4" fill="#1E293B" stroke="#64748B" stroke-width="2.5"/>
+  <!-- Bottom storyboard row: large cell + 2x2 subdivided cells -->
+  <rect x="22" y="54" width="48" height="32" rx="4" fill="#1E293B" stroke="#38BDF8" stroke-width="2.5"/>
+  <rect x="75" y="54" width="14" height="14" rx="3" fill="#1E293B" stroke="#94A3B8" stroke-width="2"/>
+  <rect x="92" y="54" width="14" height="14" rx="3" fill="#1E293B" stroke="#94A3B8" stroke-width="2"/>
+  <rect x="75" y="72" width="14" height="14" rx="3" fill="#1E293B" stroke="#94A3B8" stroke-width="2"/>
+  <rect x="92" y="72" width="14" height="14" rx="3" fill="#1E293B" stroke="#94A3B8" stroke-width="2"/>
+  <!-- Audio RMS envelope strip -->
+  <rect x="22" y="93" width="84" height="13" rx="3" fill="#0B1120"/>
+  <path d="M25 103 L31 99 L37 102 L43 96 L49 101 L55 95 L61 102 L67 97 L73 101 L79 96 L85 100 L91 98 L97 103 L103 101" stroke="#2DD4BF" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

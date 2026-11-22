@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "video-storyboard": {
+      "command": "node",
+      "args": [
+        "./server/mcp_server.mjs"
+      ]
+    }
+  }
+}

@@ -1,0 +1,17 @@
+.asr-runtime/
+.venv/
+models/
+node_modules/
+cookies*.txt
+*.cookies
+.env
+.env.*
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc
+tmp/
+out/
+clips/
+media/
+cache/

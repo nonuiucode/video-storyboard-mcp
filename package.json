@@ -1,0 +1,52 @@
+{
+  "name": "video-storyboard-mcp",
+  "version": "2.1.0",
+  "description": "Portable MCP server & Antigravity plugin built on SAOS-3624/dsh-video-storyboard (v0.7.6, Apache-2.0): variable-tier 1/1..1/8 DP storyboards, built-in offline sherpa-onnx ASR lifecycle, video_clip, and video_cache_clean.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "nonuiucode",
+  "homepage": "https://github.com/nonuiucode/video-storyboard-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nonuiucode/video-storyboard-mcp.git"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "antigravity",
+    "claude-code",
+    "cursor",
+    "video-storyboard",
+    "bilibili",
+    "sherpa-onnx",
+    "ffmpeg",
+    "asr"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "video-storyboard-mcp": "./server/mcp_server.mjs",
+    "video-storyboard-cli": "./server/cli.mjs"
+  },
+  "files": [
+    "server",
+    "scripts",
+    "skills",
+    "assets",
+    "vendor",
+    "plugin.json",
+    "mcp_config.json",
+    "README.md",
+    "README.zh.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "doctor": "node server/cli.mjs doctor",
+    "setup-asr": "node server/cli.mjs setup-asr",
+    "asr-status": "node server/cli.mjs asr-status",
+    "install:plugin": "node scripts/install.mjs",
+    "test": "node --test test/smoke.test.mjs"
+  }
+}
