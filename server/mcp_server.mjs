@@ -20,7 +20,7 @@ console.warn = writeStderr;
 
 const { callMcpTool, listMcpTools } = await import('./adapter.mjs');
 
-const SERVER_INFO = { name: 'video-storyboard', version: '2.1.0' };
+const SERVER_INFO = { name: 'video-storyboard', version: '2.1.1' };
 const DEFAULT_PROTOCOL_VERSION = '2025-03-26';
 
 function writeMessage(msg) {

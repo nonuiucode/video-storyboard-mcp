@@ -82,6 +82,13 @@ node server/cli.mjs clip "/path/to/video.mp4" --cell 2 --audio-only
 node server/cli.mjs clean --all --include-scan-cache
 ```
 
+## 常见问题（遇到 `HTTP 403 Forbidden` 怎么办）
+
+1. **不要用通用下载器裸拉音视频直链**：如果模型/客户端提取了 B 站直链再用 `curl` 或内置 HTTP 下载器去拉 `<BV>-audio.m4a`，由于缺少 `Referer: https://www.bilibili.com/`、浏览器 UA 或解析与下载出口 IP 不一致，B 站 CDN 会直接拒收并返回 `403 (0B)`。请始终让 AI 直接调用本插件的 `video_storyboard` / `video_clip`。
+2. **更新 `yt-dlp` 到最新版**：B 站和 YouTube 会定期调整风控签名，遇到 403 先运行 `pip install --user -U yt-dlp` 升级下载器。
+3. **代理分流与自动直连（默认开启）**：本插件已默认对 B 站域名与 CDN（`.bilibili.com`、`.b23.tv`、`.bilivideo.*`、`.acgvideo.com`、`.hdslb.com`、`.szbdyd.com`）注入 `NO_PROXY`，并在遇到 `403/412/429/567` 时自动回退 `--proxy ""` 直连重拉；若刻意需要走代理访问 B 站，可设环境变量 `DSH_VIDEO_BILIBILI_PROXY=keep`。
+4. **配置登录态 `cookies.txt`**：会员、充电专属或被风控限制的稿件需从浏览器导出 Netscape 格式 `cookies.txt`（切勿提交到仓库），在 `~/.dsh/video.json` 中写入 `{"cookies": "/path/to/cookies.txt"}`。
+
 ## 运行测试
 
 ```bash

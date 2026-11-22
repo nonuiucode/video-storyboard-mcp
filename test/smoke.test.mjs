@@ -71,7 +71,7 @@ test('MCP stdio JSON-RPC exposes all 8 tools and serves video_help cleanly', asy
     const messages = res.out.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
     assert.equal(messages.length, 3);
     assert.equal(messages[0]?.result?.serverInfo?.name, 'video-storyboard');
-    assert.equal(messages[0]?.result?.serverInfo?.version, '2.1.0');
+    assert.equal(messages[0]?.result?.serverInfo?.version, '2.1.1');
 
     const tools = messages[1]?.result?.tools || [];
     const expected = [
@@ -232,7 +232,7 @@ test('built-in asr_server.py --mock auto-starts via asr-lifecycle, transcribes i
   }
 });
 
-test('probeUrl retries transient HTTP 403 with browser UA and Referer headers', async () => {
+test('probeUrl sends canonical Bilibili Referer initially and retries transient HTTP 403 without duplicate headers', async () => {
   const { probeUrl } = await import(
     `file://${join(REPO_ROOT, 'vendor', 'dsh-video-storyboard', 'src', 'storyboard', 'fetch.js').replace(/\\/g, '/')}`
   );
@@ -268,13 +268,127 @@ test('probeUrl retries transient HTTP 403 with browser UA and Referer headers', 
   });
 
   assert.equal(calls.length, 2);
-  assert.ok(calls[1].includes('--add-header'));
-  assert.ok(calls[1].includes('Referer:https://b23.tv/'));
-  assert.ok(calls[1].includes('--user-agent'));
-  assert.ok(calls[1].includes(DEFAULT_UA));
+  assert.ok(calls[0].includes('--add-header'));
+  assert.ok(calls[0].includes('Referer:https://www.bilibili.com/'));
+  assert.equal(calls[0].includes('Referer:https://b23.tv/'), false);
+  assert.ok(calls[0].includes('--user-agent'));
+  assert.ok(calls[0].includes(DEFAULT_UA));
+
   assert.ok(calls[1].includes('--sleep-requests'));
   assert.ok(calls[1].includes('1'));
+  assert.equal(calls[1].filter((arg) => arg === '--add-header').length, 1);
+  assert.equal(calls[1].filter((arg) => arg === '--user-agent').length, 1);
   assert.equal(result.title, 'Mock Bili');
   assert.equal(result.duration, 120);
   assert.equal(result.maxHeight, 720);
+});
+
+test('runProcess injects expanded Bilibili NO_PROXY hosts and falls back to --proxy "" on HTTP 403', async () => {
+  const { runProcess } = await import(
+    `file://${join(REPO_ROOT, 'vendor', 'dsh-video-storyboard', 'src', 'storyboard', 'ytdlp.js').replace(/\\/g, '/')}`
+  );
+
+  const calls = [];
+  const spawnOnce = async (_tool, args, opts = {}) => {
+    calls.push({ args, noProxy: opts.env?.NO_PROXY || '' });
+    if (calls.length === 1) {
+      return {
+        code: 1,
+        stdout: '',
+        stderr: 'ERROR: unable to download video data: HTTP Error 403: Forbidden',
+      };
+    }
+    return { code: 0, stdout: 'ok', stderr: '' };
+  };
+
+  const res = await runProcess(
+    { bin: 'yt-dlp', prefix: [] },
+    ['-J', 'https://www.bilibili.com/video/BV1rx4n6FEgg'],
+    { env: { NO_PROXY: 'localhost' }, spawnOnce },
+  );
+
+  assert.equal(calls.length, 2);
+  assert.match(calls[0].noProxy, /\.bilibili\.com/);
+  assert.match(calls[0].noProxy, /\.bilivideo\.net/);
+  assert.match(calls[0].noProxy, /\.acgvideo\.com/);
+  assert.match(calls[0].noProxy, /\.szbdyd\.com/);
+  assert.deepEqual(calls[1].args.slice(0, 2), ['--proxy', '']);
+  assert.equal(res.code, 0);
+  assert.equal(res.stdout, 'ok');
+});
+
+test('explainYtdlpError translates HTTP Error 403 into actionable guidance', async () => {
+  const { explainYtdlpError } = await import(
+    `file://${join(REPO_ROOT, 'vendor', 'dsh-video-storyboard', 'src', 'storyboard', 'ytdlp.js').replace(/\\/g, '/')}`
+  );
+
+  const msg = explainYtdlpError('ERROR: unable to download video data: HTTP Error 403: Forbidden', 1);
+  assert.match(msg, /HTTP 403/i);
+  assert.match(msg, /Referer/i);
+  assert.match(msg, /yt-dlp/i);
+  assert.match(msg, /cookies\.txt/i);
+});
+
+test('directFromSummary and resolveDirectUrl fill canonical Bilibili Referer and retry transient HTTP 403', async () => {
+  const { directFromSummary, resolveDirectUrl } = await import(
+    `file://${join(REPO_ROOT, 'vendor', 'dsh-video-storyboard', 'src', 'storyboard', 'direct-url.js').replace(/\\/g, '/')}`
+  );
+  const { BILIBILI_REFERER, DEFAULT_UA } = await import(
+    `file://${join(REPO_ROOT, 'vendor', 'dsh-video-storyboard', 'src', 'storyboard', 'ytdlp.js').replace(/\\/g, '/')}`
+  );
+
+  const direct = directFromSummary(
+    { formats: [{ vcodec: 'avc1', height: 1080, url: 'https://upos-sz.bilivideo.com/test.m4s' }] },
+    1080,
+    'https://b23.tv/mock456',
+  );
+  assert.equal(direct?.referer, BILIBILI_REFERER);
+
+  const calls = [];
+  const fakeRun = async (_tool, args) => {
+    calls.push(args);
+    if (calls.length === 1) {
+      return {
+        code: 1,
+        stdout: '',
+        stderr: 'ERROR: HTTP Error 403: Forbidden',
+      };
+    }
+    return {
+      code: 0,
+      stderr: '',
+      stdout: JSON.stringify({
+        formats: [{ vcodec: 'avc1', height: 720, url: 'https://upos-sz.bilivideo.com/zoom.mp4' }],
+      }),
+    };
+  };
+
+  const resolved = await resolveDirectUrl('https://b23.tv/mock456', {
+    allowAnonymous: true,
+    ytdlp: { bin: 'yt-dlp', prefix: [] },
+    run: fakeRun,
+    useCache: false,
+  });
+
+  assert.equal(calls.length, 2);
+  assert.ok(calls[0].includes(`Referer:${BILIBILI_REFERER}`));
+  assert.ok(calls[0].includes(DEFAULT_UA));
+  assert.ok(calls[1].includes('--sleep-requests'));
+  assert.ok(calls[1].includes('1'));
+  assert.equal(calls[1].filter((arg) => arg === '--add-header').length, 1);
+  assert.equal(calls[1].filter((arg) => arg === '--user-agent').length, 1);
+  assert.equal(resolved.referer, BILIBILI_REFERER);
+
+  const { buildRetryArgsWithHeaders } = await import(
+    `file://${join(REPO_ROOT, 'vendor', 'dsh-video-storyboard', 'src', 'storyboard', 'ytdlp.js').replace(/\\/g, '/')}`
+  );
+  const dropped = buildRetryArgsWithHeaders(
+    'https://b23.tv/mock456',
+    ['--continue', '--add-header', `Referer:${BILIBILI_REFERER}`, 'https://b23.tv/mock456'],
+    { dropContinue: true },
+  );
+  assert.equal(dropped.includes('--continue'), false);
+  assert.ok(dropped.includes('--no-continue'));
+  assert.equal(dropped.filter((arg) => arg === '--add-header').length, 1);
+  assert.equal(dropped.at(-1), 'https://b23.tv/mock456');
 });

@@ -1,7 +1,7 @@
 {
   "name": "video-storyboard",
   "displayName": "Video Storyboard",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Scene-aware video storyboard plugin & MCP server built on SAOS-3624/dsh-video-storyboard (v0.7.6, Apache-2.0): variable 1/1..1/8 DP row-packed grids, built-in offline sherpa-onnx ASR lifecycle, targeted OCR, video_clip, and video_cache_clean.",
   "logo": "assets/logo.svg",
   "author": {

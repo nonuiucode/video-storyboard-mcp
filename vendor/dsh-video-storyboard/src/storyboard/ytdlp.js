@@ -8,8 +8,9 @@
  * 好处是可替换：将来换成别的下载器，只需要另写一份同样五个函数，fetch.js 不用动。
  *
  * Modified for Antigravity (`video-storyboard` workspace plugin, Apache-2.0 §4(b)):
- * added host-selective `NO_PROXY` for Bilibili domestic hosts (`.bilibili.com`, `.b23.tv`, `.bilivideo.com`,
- * `.bilivideo.cn`, `.hdslb.com`) with automatic `--proxy ""` fallback on proxy/SSL/timeout/567 failures in `runProcess()`.
+ * added host-selective `NO_PROXY` for Bilibili domains (including CDN hosts `.bilivideo.net`, `.acgvideo.com`,
+ * `.szbdyd.com`, `.biliapi.net`, `.biliapi.com`), automatic `--proxy ""` fallback on proxy/SSL/timeout/403/412/429/567
+ * failures in `runProcess()`, canonical Bilibili Referer helpers, and human-readable HTTP 403 diagnostics.
  */
 
 import { spawn } from 'node:child_process';
@@ -153,8 +154,76 @@ function spawnProcessOnce({ bin, prefix = [] }, args, { timeoutMs = 120_000, sig
   });
 }
 
-function bilibiliDirectEnv(baseEnv = process.env) {
-  const extra = ['.bilibili.com', '.b23.tv', '.bilivideo.com', '.bilivideo.cn', '.hdslb.com'];
+export const BILIBILI_REFERER = 'https://www.bilibili.com/';
+export const BILIBILI_URL_RE = /(?:^|\/\/|\.)(?:bilibili\.com|b23\.tv|bilivideo\.com|bilivideo\.cn|bilivideo\.net|acgvideo\.com|hdslb\.com|biliapi\.net|biliapi\.com|szbdyd\.com)(?:[/:?]|$)/i;
+export const TRANSIENT_HTTP_RETRY_RE = /HTTP Error (?:403|412|429|567)/i;
+
+const BILIBILI_HOST_RE = /(?:^|\.)(?:bilibili\.com|b23\.tv|bilivideo\.com|bilivideo\.cn|bilivideo\.net|acgvideo\.com|hdslb\.com|biliapi\.net|biliapi\.com|szbdyd\.com)$/i;
+
+export function isBilibiliUrl(url) {
+  if (typeof url !== 'string' || !url) return false;
+  if (/^https?:\/\//i.test(url)) {
+    try {
+      return BILIBILI_HOST_RE.test(new URL(url).hostname);
+    } catch { /* fall through */ }
+  }
+  return BILIBILI_URL_RE.test(url);
+}
+
+export function canonicalReferer(url) {
+  if (isBilibiliUrl(url)) return BILIBILI_REFERER;
+  try {
+    const u = new URL(url);
+    if (u.protocol === 'http:' || u.protocol === 'https:') {
+      return `${u.protocol}//${u.host}/`;
+    }
+  } catch { /* ignore non-http(s) */ }
+  return null;
+}
+
+function hasRefererArg(args) {
+  return args.some((arg, idx) => (
+    arg === '--referer'
+    || (arg === '--add-header' && /^referer\s*:/i.test(String(args[idx + 1] ?? '')))
+  ));
+}
+
+export function appendUniqueBrowserHeaders(url, args) {
+  const referer = canonicalReferer(url);
+  if (referer && !hasRefererArg(args)) {
+    args.push('--add-header', `Referer:${referer}`);
+  }
+  if (!args.includes('--user-agent') && !args.includes('-U')) {
+    args.push('--user-agent', DEFAULT_UA);
+  }
+  return args;
+}
+
+export function appendBilibiliHeaders(url, args) {
+  if (isBilibiliUrl(url)) appendUniqueBrowserHeaders(url, args);
+  return args;
+}
+
+export function buildRetryArgsWithHeaders(url, baseArgs, { dropContinue = false } = {}) {
+  const body = dropContinue
+    ? baseArgs.slice(0, -1).filter((arg) => arg !== '--continue')
+    : baseArgs.slice(0, -1);
+  if (dropContinue && !body.includes('--no-continue')) {
+    body.push('--no-continue');
+  }
+  appendUniqueBrowserHeaders(url, body);
+  if (!body.includes('--sleep-requests')) {
+    body.push('--sleep-requests', '1');
+  }
+  body.push(baseArgs[baseArgs.length - 1]);
+  return body;
+}
+
+export function bilibiliDirectEnv(baseEnv = process.env) {
+  const extra = [
+    '.bilibili.com', '.b23.tv', '.bilivideo.com', '.bilivideo.cn', '.bilivideo.net',
+    '.hdslb.com', '.biliapi.net', '.biliapi.com', '.acgvideo.com', '.szbdyd.com',
+  ];
   const existing = String(baseEnv.NO_PROXY || baseEnv.no_proxy || '')
     .split(',')
     .map((s) => s.trim())
@@ -170,15 +239,16 @@ function bilibiliDirectEnv(baseEnv = process.env) {
   return { ...baseEnv, NO_PROXY: merged, no_proxy: merged };
 }
 
-function isBilibiliDirectCandidate(args) {
-  if (process.env.DSH_VIDEO_BILIBILI_PROXY === 'keep') return false;
+function isBilibiliDirectCandidate(args, env = process.env) {
+  const proxyPolicy = env?.DSH_VIDEO_BILIBILI_PROXY ?? process.env.DSH_VIDEO_BILIBILI_PROXY;
+  if (proxyPolicy === 'keep') return false;
   if (!Array.isArray(args) || args.includes('--proxy')) return false;
-  return args.some((arg) => typeof arg === 'string' && /(?:bilibili\.com|b23\.tv)/i.test(arg));
+  return args.some((arg) => typeof arg === 'string' && /^https?:\/\//i.test(arg) && isBilibiliUrl(arg));
 }
 
-function isNetworkFailure(stderr) {
+export function isNetworkFailure(stderr) {
   const text = String(stderr || '');
-  return /(?:ProxyError|SSL|TLS|handshake|timed out|timeout|ECONN|ENET|EAI_|getaddrinfo|ConnectionReset|ConnectionError|IncompleteRead|RemoteDisconnected|Unable to download|HTTP Error 567)/i.test(text);
+  return /(?:ProxyError|SSL|TLS|handshake|timed out|timeout|ECONN|ENET|EAI_|getaddrinfo|ConnectionReset|ConnectionError|IncompleteRead|RemoteDisconnected|Unable to download|HTTP Error (?:403|412|429|567))/i.test(text);
 }
 
 /**
@@ -186,19 +256,20 @@ function isNetworkFailure(stderr) {
  * @returns {Promise<{stdout:string, stderr:string, code:number}>}
  */
 export async function runProcess({ bin, prefix = [] }, args, opts = {}) {
-  if (!isBilibiliDirectCandidate(args)) {
-    return spawnProcessOnce({ bin, prefix }, args, opts);
+  const spawnImpl = opts.spawnOnce ?? spawnProcessOnce;
+  if (!isBilibiliDirectCandidate(args, opts.env)) {
+    return spawnImpl({ bin, prefix }, args, opts);
   }
   const biliOpts = { ...opts, env: bilibiliDirectEnv(opts.env ?? process.env) };
   try {
-    const res = await spawnProcessOnce({ bin, prefix }, args, biliOpts);
+    const res = await spawnImpl({ bin, prefix }, args, biliOpts);
     if (res.code !== 0 && isNetworkFailure(res.stderr)) {
-      return await spawnProcessOnce({ bin, prefix }, ['--proxy', '', ...args], opts);
+      return await spawnImpl({ bin, prefix }, ['--proxy', '', ...args], opts);
     }
     return res;
   } catch (err) {
     if (/timed out/i.test(err?.message ?? '')) {
-      return await spawnProcessOnce({ bin, prefix }, ['--proxy', '', ...args], opts);
+      return await spawnImpl({ bin, prefix }, ['--proxy', '', ...args], opts);
     }
     throw err;
   }
@@ -269,6 +340,13 @@ export function explainYtdlpError(stderr, code = 1) {
   if (/Sign in to confirm|login required|需要登录|Please log in/i.test(text)) {
     return 'this video needs a signed-in session. Export cookies.txt and set DSH_VIDEO_COOKIES ' +
       '(or "cookies" in ~/.dsh/video.json) — SESSDATA may also have expired. See docs/SETUP.md.';
+  }
+  if (/HTTP Error 403/i.test(text)) {
+    return 'HTTP 403 Forbidden from media host/CDN — usually caused by anti-hotlink Referer/User-Agent checks, ' +
+      'a proxy node blocked or mismatched with the signed media URL IP, an outdated yt-dlp build, or login-gated content. ' +
+      'Fix: upgrade yt-dlp (`pip install --user -U yt-dlp`), bypass proxy for Bilibili (or retry without proxy), ' +
+      'ensure downloads go through video_storyboard/yt-dlp instead of bare HTTP downloaders, ' +
+      'or configure cookies.txt in ~/.dsh/video.json.';
   }
   if (/HTTP Error 567/i.test(text)) {
     return 'C站 refused this request (HTTP 567) — that is their risk control, not a plugin bug. ' +

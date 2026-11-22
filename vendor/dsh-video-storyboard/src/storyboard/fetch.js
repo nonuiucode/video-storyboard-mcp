@@ -14,7 +14,8 @@
  *
  * Modified for Antigravity (`video-storyboard`, Apache-2.0 §4(b)):
  * surface real `downloadError` when no video stream file is produced, guard `ffmpegAbs` null before `isAbsolute()`,
- * and retry transient HTTP 403/412/429/567 responses with browser UA/Referer headers in `probeSummary()` and `fetchMedia()`.
+ * inject canonical `Referer:https://www.bilibili.com/` and browser UA on initial Bilibili requests, and retry transient
+ * HTTP 403/412/429/567 responses with deduplicated browser headers, `--no-continue`, and `--sleep-requests 1`.
  */
 
 import {
@@ -28,7 +29,8 @@ import { DEFAULT_FFMPEG, probeVideo } from './probe.js';
 // 拿不到绝对路径就不传 `--ffmpeg-location`，所以要能再解析一次（会话中途装了 ffmpeg 也算数）
 import { resolveMediaBinary } from './binaries.js';
 import {
-  DEFAULT_UA, discoverYtdlp, explainYtdlpError, formatSelector, resolveAuth, runProcess,
+  TRANSIENT_HTTP_RETRY_RE, appendBilibiliHeaders, buildRetryArgsWithHeaders,
+  discoverYtdlp, explainYtdlpError, formatSelector, resolveAuth, runProcess,
   summariseInfo, unwrapSingle,
 } from './ytdlp.js';
 import {
@@ -73,21 +75,8 @@ async function cleanSidecars(dir) {
  */
 const runFile = promisify(execFile);
 
-const TRANSIENT_HTTP_RETRY_RE = /HTTP Error (?:403|412|429|567)/i;
-
-function buildBrowserRetryArgs(url, baseArgs) {
-  let referer = null;
-  try {
-    const u = new URL(url);
-    referer = `${u.protocol}//${u.host}/`;
-  } catch { /* 不是 http(s)，跳过 */ }
-  return baseArgs.slice(0, -1).concat([
-    ...(referer ? ['--add-header', `Referer:${referer}`] : []),
-    '--user-agent',
-    DEFAULT_UA,
-    '--sleep-requests', '1',
-    baseArgs[baseArgs.length - 1],
-  ]);
+function buildBrowserRetryArgs(url, baseArgs, opts = {}) {
+  return buildRetryArgsWithHeaders(url, baseArgs, opts);
 }
 
 /**
@@ -371,7 +360,7 @@ export async function fetchMedia(input, opts = {}) {
 
   // 顺手把 zoom 要用的高清直链挑出来并记住 —— formats 已经在手里了，这一步零成本。
   // 否则 zoom 会再跑一次 `-J`（2.4 s），而它每次都紧跟在这个调用后面。
-  const zoomDirect = directFromSummary(summary, zoomHeight);
+  const zoomDirect = directFromSummary(summary, zoomHeight, url);
   if (zoomDirect) rememberDirect(normalized, zoomHeight, zoomDirect);
 
   // ---- 空间检查（下载前，按估算大小拒绝，不静默降质）
@@ -416,15 +405,16 @@ export async function fetchMedia(input, opts = {}) {
     '-o', join(dir, 'video.%(ext)s'),
   ];
   if (auth.cookiesPath) dlArgs.push('--cookies', auth.cookiesPath);
+  appendBilibiliHeaders(url, dlArgs);
   dlArgs.push(url);
 
   let downloaded = await run(tool, dlArgs, { timeoutMs: 600_000 });
 
-  // 风控 / 限流（412 / 429 / 567）：带一个**正常的浏览器请求**再试一次 ——
-  // 用浏览器 UA，Referer 指向**这个 URL 自己的源站**（防盗链检查的就是"是不是从本站点的页面点进来的"）。
+  // 风控 / 限流（403 / 412 / 429 / 567）：带一个**正常的浏览器请求**再试一次 ——
+  // 用浏览器 UA，Referer 指向源站并放弃可能残破的 `.part` 断点续传（`--no-continue`）。
   // 不去猜任何站点的风控算法，也不换代理、不轮换账号：就是一次普通重试，失败就如实报出来。
   if (downloaded.code !== 0 && TRANSIENT_HTTP_RETRY_RE.test(downloaded.stderr ?? '')) {
-    const retryArgs = buildBrowserRetryArgs(url, dlArgs);
+    const retryArgs = buildBrowserRetryArgs(url, dlArgs, { dropContinue: true });
     downloaded = await run(tool, retryArgs, { timeoutMs: 600_000 });
   }
 
@@ -589,8 +579,8 @@ export async function fetchMedia(input, opts = {}) {
  */
 async function probeSummary({ url, auth, tool, env, run }) {
   const args = ['-J', '--ignore-config', '--no-warnings', '--no-playlist'];
-  const out = {};
   if (auth.cookiesPath) args.push('--cookies', auth.cookiesPath);
+  appendBilibiliHeaders(url, args);
   args.push(url);
   let probed = await run(tool, args, { timeoutMs: 90_000 });
   if (probed.code !== 0 && TRANSIENT_HTTP_RETRY_RE.test(probed.stderr ?? '')) {
@@ -610,7 +600,10 @@ async function probeSummary({ url, auth, tool, env, run }) {
     return { summary, authKind: auth.kind, raw };
   }
   try {
-    const anon = await run(tool, ['-J', '--ignore-config', '--no-warnings', '--no-playlist', url], { timeoutMs: 90_000 });
+    const anonArgs = ['-J', '--ignore-config', '--no-warnings', '--no-playlist'];
+    appendBilibiliHeaders(url, anonArgs);
+    anonArgs.push(url);
+    const anon = await run(tool, anonArgs, { timeoutMs: 90_000 });
     if (anon.code !== 0) return { summary, authKind: auth.kind, raw };
     const anonInfo = unwrapSingle(JSON.parse(anon.stdout), url);
     const a = summariseInfo(anonInfo);

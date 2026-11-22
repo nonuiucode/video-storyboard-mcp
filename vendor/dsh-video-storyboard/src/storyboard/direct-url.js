@@ -6,11 +6,15 @@
  * 这里只要一个带签名的临时 URI（2–6 帧、几次 HTTP seek 就作废）。
  *
  * 直链**只存在进程内存里**：落盘的凭证比多花 2.4 秒危险得多。
+ *
+ * Modified for Antigravity (`video-storyboard`, Apache-2.0 §4(b)):
+ * fill canonical Bilibili `Referer` when missing on direct formats, send browser UA/Referer headers on initial
+ * Bilibili `resolveDirectUrl()` probes, and retry transient HTTP 403/412/429/567 responses with `--sleep-requests 1`.
  */
 
 import {
-  DEFAULT_UA, discoverYtdlp, explainYtdlpError, formatSelector, resolveAuth, runProcess,
-  summariseInfo, unwrapSingle,
+  BILIBILI_REFERER, DEFAULT_UA, TRANSIENT_HTTP_RETRY_RE, appendBilibiliHeaders, buildRetryArgsWithHeaders,
+  discoverYtdlp, explainYtdlpError, isBilibiliUrl, resolveAuth, runProcess, summariseInfo, unwrapSingle,
 } from './ytdlp.js';
 import { assertFetchableUrl, normalizeUrl } from './url.js';
 
@@ -61,18 +65,20 @@ export function pickVideoFormat(formats, height) {
 }
 
 /** 从 `-J` 的结果里直接挑出 zoom 要用的那一档直链（不下载任何东西）。 */
-export function directFromSummary(summary, height) {
-  return directFromFormat(pickVideoFormat(summary?.formats, height));
+export function directFromSummary(summary, height, sourceUrl = null) {
+  return directFromFormat(pickVideoFormat(summary?.formats, height), sourceUrl);
 }
 
-function directFromFormat(chosen) {
+function directFromFormat(chosen, sourceUrl = null) {
   if (!chosen?.url) return null;
   const deadline = Number(chosen.url.match(/[?&]deadline=(\d+)/)?.[1]);
+  const referer = chosen.http_headers?.Referer
+    || ((isBilibiliUrl(chosen.url) || isBilibiliUrl(sourceUrl)) ? BILIBILI_REFERER : null);
   return {
     url: chosen.url,
     height: chosen.height ?? null,
     userAgent: chosen.http_headers?.['User-Agent'] || DEFAULT_UA,
-    referer: chosen.http_headers?.Referer || null,
+    referer,
     // B 站直链带 deadline（约 2 小时）；拿不到就按 90 分钟算，宁可早重解析
     expiresAt: Number.isFinite(deadline) && deadline > 0 ? deadline * 1000 : Date.now() + 90 * 60 * 1000,
   };
@@ -107,9 +113,14 @@ export async function resolveDirectUrl(input, opts = {}) {
 
   const args = ['-J', '--ignore-config', '--no-warnings', '--no-playlist'];
   if (auth.cookiesPath) args.push('--cookies', auth.cookiesPath);
+  appendBilibiliHeaders(url, args);
   args.push(url);
 
-  const probed = await run(tool, args, { timeoutMs: 90_000 });
+  let probed = await run(tool, args, { timeoutMs: 90_000 });
+  if (probed.code !== 0 && TRANSIENT_HTTP_RETRY_RE.test(probed.stderr ?? '')) {
+    const retryArgs = buildRetryArgsWithHeaders(url, args);
+    probed = await run(tool, retryArgs, { timeoutMs: 90_000 });
+  }
   if (probed.code !== 0) throw new Error(explainYtdlpError(probed.stderr, probed.code));
 
   let info;
@@ -122,7 +133,7 @@ export async function resolveDirectUrl(input, opts = {}) {
   if (!summary.formats.length) throw new Error('no video formats available for this link');
 
   const chosen = pickVideoFormat(summary.formats, height);
-  const direct = directFromFormat(chosen);
+  const direct = directFromFormat(chosen, url);
   if (!direct) throw new Error('the selected format has no direct URL');
 
   rememberDirect(normalized, height, direct);

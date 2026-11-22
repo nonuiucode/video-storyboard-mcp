@@ -82,10 +82,15 @@ node server/cli.mjs clip "/path/to/video.mp4" --cell 2 --audio-only
 node server/cli.mjs clean --all --include-scan-cache
 ```
 
-## Notes on Auth Cookies & Cost
+## Notes on Auth Cookies, Cost & Troubleshooting (`HTTP 403`)
 
 - Anonymous Bilibili/YouTube links may be capped or rate-limited (`HTTP 403` / `567`). For higher bitrates or platform CC tracks, export a Netscape `cookies.txt` and configure `{"cookies": "/path/to/cookies.txt"}` in `~/.dsh/video.json` (or pass `--cookies`). Never commit `cookies.txt` to version control.
 - Use `video_probe` first and `dryRun: true` on long videos before committing sheets. Use `from` + `segment: 300` to scan long videos in 5-minute windows.
+- **Hitting `HTTP 403 Forbidden (0B)` on Bilibili (`*.m4a` / `*.mp4`)?**
+  1. **Use the plugin tools instead of bare downloaders**: If an AI client extracts a raw Bilibili direct URL and fetches it with `curl` or a generic HTTP downloader without `Referer: https://www.bilibili.com/`, browser `User-Agent`, and matching exit IP, the CDN immediately returns `403 Forbidden (0B)`. Always let `video_storyboard` / `video_clip` run via `yt-dlp`.
+  2. **Upgrade `yt-dlp`**: Bilibili frequently updates signature & anti-hotlink checks; run `pip install --user -U yt-dlp` (or `yt-dlp -U`).
+  3. **Proxy bypass (automatic by default)**: Bilibili URLs automatically inject `NO_PROXY` across `.bilibili.com`, `.b23.tv`, `.bilivideo.*`, `.acgvideo.com`, `.hdslb.com`, `.szbdyd.com` and fall back to `--proxy ""` on `403/412/429/567`. Set `DSH_VIDEO_BILIBILI_PROXY=keep` if you intentionally want Bilibili traffic routed through your proxy.
+  4. **Signed-in cookies**: Some members-only, paid, or high-risk-control videos require `cookies.txt` in `~/.dsh/video.json`.
 
 ## Running Tests
 
