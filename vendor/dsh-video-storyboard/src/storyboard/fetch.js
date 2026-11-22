@@ -13,7 +13,8 @@
  * 这一层只负责"把东西弄到本地"和"记下能拿到什么"，不碰扫描/取帧。
  *
  * Modified for Antigravity (`video-storyboard`, Apache-2.0 §4(b)):
- * surface real `downloadError` when no video stream file is produced and guard `ffmpegAbs` null before `isAbsolute()`.
+ * surface real `downloadError` when no video stream file is produced, guard `ffmpegAbs` null before `isAbsolute()`,
+ * and retry transient HTTP 403/412/429/567 responses with browser UA/Referer headers in `probeSummary()` and `fetchMedia()`.
  */
 
 import {
@@ -71,6 +72,23 @@ async function cleanSidecars(dir) {
  * 失败时把 stderr 带进 Error.message —— ffmpeg 的原因全在那里。
  */
 const runFile = promisify(execFile);
+
+const TRANSIENT_HTTP_RETRY_RE = /HTTP Error (?:403|412|429|567)/i;
+
+function buildBrowserRetryArgs(url, baseArgs) {
+  let referer = null;
+  try {
+    const u = new URL(url);
+    referer = `${u.protocol}//${u.host}/`;
+  } catch { /* 不是 http(s)，跳过 */ }
+  return baseArgs.slice(0, -1).concat([
+    ...(referer ? ['--add-header', `Referer:${referer}`] : []),
+    '--user-agent',
+    DEFAULT_UA,
+    '--sleep-requests', '1',
+    baseArgs[baseArgs.length - 1],
+  ]);
+}
 
 /**
  * 自己把 DASH 的音频轨合进视频里。
@@ -405,17 +423,8 @@ export async function fetchMedia(input, opts = {}) {
   // 风控 / 限流（412 / 429 / 567）：带一个**正常的浏览器请求**再试一次 ——
   // 用浏览器 UA，Referer 指向**这个 URL 自己的源站**（防盗链检查的就是"是不是从本站点的页面点进来的"）。
   // 不去猜任何站点的风控算法，也不换代理、不轮换账号：就是一次普通重试，失败就如实报出来。
-  if (downloaded.code !== 0 && /HTTP Error (?:412|429|567)/i.test(downloaded.stderr ?? '')) {
-    let referer = null;
-    try { const u = new URL(url); referer = `${u.protocol}//${u.host}/`; } catch { /* 不是 http(s)，跳过 */ }
-    const retryArgs = dlArgs.slice(0, -1).concat([
-      ...(referer ? ['--add-header', `Referer:${referer}`] : []),
-      '--user-agent',
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) ' +
-        'Chrome/124.0.0.0 Safari/537.36',
-      '--sleep-requests', '1',
-      dlArgs[dlArgs.length - 1],
-    ]);
+  if (downloaded.code !== 0 && TRANSIENT_HTTP_RETRY_RE.test(downloaded.stderr ?? '')) {
+    const retryArgs = buildBrowserRetryArgs(url, dlArgs);
     downloaded = await run(tool, retryArgs, { timeoutMs: 600_000 });
   }
 
@@ -583,7 +592,11 @@ async function probeSummary({ url, auth, tool, env, run }) {
   const out = {};
   if (auth.cookiesPath) args.push('--cookies', auth.cookiesPath);
   args.push(url);
-  const probed = await run(tool, args, { timeoutMs: 90_000 });
+  let probed = await run(tool, args, { timeoutMs: 90_000 });
+  if (probed.code !== 0 && TRANSIENT_HTTP_RETRY_RE.test(probed.stderr ?? '')) {
+    const retryArgs = buildBrowserRetryArgs(url, args);
+    probed = await run(tool, retryArgs, { timeoutMs: 90_000 });
+  }
   if (probed.code !== 0) throw new Error(explainYtdlpError(probed.stderr, probed.code));
   let info;
   try {

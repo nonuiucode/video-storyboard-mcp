@@ -18,8 +18,10 @@ three modified upstream files under `vendor/dsh-video-storyboard/src/storyboard/
    (`.bilibili.com`, `.b23.tv`, `.bilivideo.com`, `.bilivideo.cn`, `.hdslb.com`)
    with automatic `--proxy ""` fallback on proxy, SSL, timeout, or HTTP 567 errors.
 2. `src/storyboard/fetch.js`:
-   Surfaced real `downloadError` before audio-only fallback checks and guarded
-   `ffmpegAbs` null values before `path.isAbsolute(ffmpegAbs)`.
+   Surfaced real `downloadError` before audio-only fallback checks, guarded
+   `ffmpegAbs` null values before `path.isAbsolute(ffmpegAbs)`, and added a
+   single browser UA/Referer retry (`--sleep-requests 1`) on transient HTTP
+   403/412/429/567 responses in both `probeSummary()` and `fetchMedia()`.
 3. `src/storyboard/asr.js`:
    Added `DSH_ASR_FALLBACK_CONFIG` as a lowest-priority fallback config candidate
    after `$DSH_HOME/asr.json` and `~/.dsh/asr.json` so bundled local ASR runtimes

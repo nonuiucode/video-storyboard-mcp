@@ -40,3 +40,8 @@ node server/cli.mjs clean --all --include-scan-cache
    - Hard-coded lyrics/bilingual subs with no ASR/track -> `video_subtitles` (pass `band: [y0, y1]` if needed)
    - Voice tone, music, or motion -> `video_clip` (inspect with native file reader)
 4. **Mandatory cleanup (`video_cache_clean`)**: once done summarizing and no further `zoom`/`clip` calls are needed, call `video_cache_clean` immediately so downloaded media do not accumulate on disk.
+
+## Sandboxed Clients & Troubleshooting
+
+- **Network & local ASR port binding**: Fetching remote URLs (`probe`, `storyboard`, `locate`) and auto-starting the built-in local ASR HTTP server (`127.0.0.1:18321`) require outbound network or localhost port-binding permission when executed inside a restricted sandbox. Visual-only CLI calls on local or already-cached media (`storyboard --transcript off`, `subtitles`, `clean`) require neither network nor port binding.
+- **Transient Bilibili `HTTP 403` / rate limits**: Anonymous `HTTP 403/412/429/567` errors during metadata probing or downloading are automatically retried once with browser `User-Agent`/`Referer` headers and `--sleep-requests 1`. If a `b23.tv/...` short link remains throttled, retry with the canonical `BV...` URL or configure `cookies.txt`.

@@ -231,3 +231,50 @@ test('built-in asr_server.py --mock auto-starts via asr-lifecycle, transcribes i
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 });
+
+test('probeUrl retries transient HTTP 403 with browser UA and Referer headers', async () => {
+  const { probeUrl } = await import(
+    `file://${join(REPO_ROOT, 'vendor', 'dsh-video-storyboard', 'src', 'storyboard', 'fetch.js').replace(/\\/g, '/')}`
+  );
+  const { DEFAULT_UA } = await import(
+    `file://${join(REPO_ROOT, 'vendor', 'dsh-video-storyboard', 'src', 'storyboard', 'ytdlp.js').replace(/\\/g, '/')}`
+  );
+
+  const calls = [];
+  const fakeRun = async (_tool, args) => {
+    calls.push(args);
+    if (calls.length === 1) {
+      return {
+        code: 1,
+        stdout: '',
+        stderr: 'ERROR: [BiliBili] BV1mock: Unable to download JSON metadata: HTTP Error 403: Forbidden',
+      };
+    }
+    return {
+      code: 0,
+      stderr: '',
+      stdout: JSON.stringify({
+        title: 'Mock Bili',
+        duration: 120,
+        formats: [{ vcodec: 'avc1', height: 720, url: 'https://example.com/v.mp4' }],
+      }),
+    };
+  };
+
+  const result = await probeUrl('https://b23.tv/mock123', {
+    allowAnonymous: true,
+    ytdlp: { bin: 'yt-dlp', prefix: [] },
+    run: fakeRun,
+  });
+
+  assert.equal(calls.length, 2);
+  assert.ok(calls[1].includes('--add-header'));
+  assert.ok(calls[1].includes('Referer:https://b23.tv/'));
+  assert.ok(calls[1].includes('--user-agent'));
+  assert.ok(calls[1].includes(DEFAULT_UA));
+  assert.ok(calls[1].includes('--sleep-requests'));
+  assert.ok(calls[1].includes('1'));
+  assert.equal(result.title, 'Mock Bili');
+  assert.equal(result.duration, 120);
+  assert.equal(result.maxHeight, 720);
+});
