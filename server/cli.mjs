@@ -28,16 +28,16 @@ function parseArgv(argv) {
   const positionals = [];
   const flags = {};
   const valueFlags = new Set([
-    'from', 'to', 'segment', 'strategy', 'budget', 'max-frames', 'max-sheets',
+    'from', 'to', 'segment', 'strategy', 'preset', 'budget', 'max-frames', 'max-sheets',
     'cut-floor', 'scan-gap', 'integral-seconds', 'tier-map', 'pick', 'burn',
     'transcript', 'transcript-file', 'detail', 'hotwords', 'quality', 'scan-height',
     'zoom-height', 'cell-range', 'cookies', 'cell', 'frames', 'max', 'max-strips',
-    'step-sec', 'band', 'times', 'max-height',
+    'step-sec', 'band', 'times', 'max-height', 'format',
     'model', 'mirror', 'port', 'language', 'python',
   ]);
   const boolFlags = new Set([
     'json', 'allow-anonymous', 'dry-run', 'text-only', 'audio-only',
-    'all', 'include-scan-cache', 'help',
+    'full', 'save-file', 'all', 'include-scan-cache', 'help',
   ]);
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -132,12 +132,13 @@ function printHelp() {
     'Commands:',
     '  doctor                            Run upstream environment & ASR diagnostic',
     '  probe <source>                    Read container/link metadata (no download, zero image tokens)',
-    '  storyboard <source>               Generate variable-tier DP-packed storyboard + transcript',
+    '  storyboard <source> [options]     Generate variable-tier DP-packed storyboard (--preset summary|lecture)',
+    '  transcript <source> [options]     Extract untruncated timestamped transcript (auto-pages >30m)',
     '  zoom <source> [--cell N]          High-res close-up of a cell or [--from A --to B]',
     '  locate <source> <query>           Fuzzy text search in transcript -> timestamps',
     '  subtitles <source>                Clip hard-coded subtitle band into one tall strip image',
     '  clip <source> [--cell N]          Export trimmed MP4/MP3 snippet for read_file inspection',
-    '  clean [<source>] [--all]          Delete cached videos, clips, and preview images',
+    '  clean [<source>] [--all]          Delete cached videos, transcripts, clips, and preview images',
     '  setup-asr [options]               Install local offline sherpa-onnx ASR service & models',
     '  asr-status [--json]               Inspect active ASR endpoint & lifecycle configuration',
     '  help [topic]                      Show upstream video_help manual',
@@ -246,6 +247,7 @@ async function main() {
     if (flags.to !== undefined) args.to = numFlag(flags, 'to');
     if (flags.segment !== undefined) args.segment = intFlag(flags, 'segment');
     if (flags.strategy !== undefined) args.strategy = String(flags.strategy);
+    if (flags.preset !== undefined) args.preset = String(flags.preset);
     if (flags.budget !== undefined) args.budget = intFlag(flags, 'budget');
     if (flags['max-frames'] !== undefined) args.maxFrames = intFlag(flags, 'max-frames');
     if (flags['max-sheets'] !== undefined) args.maxSheets = intFlag(flags, 'max-sheets');
@@ -307,6 +309,19 @@ async function main() {
     if (flags['step-sec'] !== undefined) args.stepSec = numFlag(flags, 'step-sec');
     if (flags.band !== undefined) args.band = numListFlag(flags, 'band');
     if (flags.times !== undefined) args.times = numListFlag(flags, 'times');
+    buildCommonFetchFlags(flags, args);
+  } else if (cmd === 'transcript') {
+    if (!positionals[1]) throw new Error('transcript requires <source>');
+    toolName = 'video_transcript';
+    args.input = positionals[1];
+    if (flags.from !== undefined) args.from = numFlag(flags, 'from');
+    if (flags.to !== undefined) args.to = numFlag(flags, 'to');
+    if (flags.segment !== undefined) args.segment = intFlag(flags, 'segment');
+    if (flags.full) args.full = true;
+    if (flags.format !== undefined) args.format = String(flags.format);
+    if (flags['save-file']) args.saveFile = true;
+    if (flags['transcript-file'] !== undefined) args.transcriptFile = String(flags['transcript-file']);
+    if (flags.hotwords !== undefined) args.hotwords = String(flags.hotwords);
     buildCommonFetchFlags(flags, args);
   } else if (cmd === 'clip') {
     if (!positionals[1]) throw new Error('clip requires <source>');

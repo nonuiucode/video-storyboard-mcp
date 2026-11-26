@@ -27,7 +27,7 @@ async function getFreePort() {
   });
 }
 
-test('MCP stdio JSON-RPC exposes all 8 tools and serves video_help cleanly', async () => {
+test('MCP stdio JSON-RPC exposes all 9 tools and serves video_help cleanly', async () => {
   const tmpDir = await mkdtemp(join(tmpdir(), 'vs-mcp-test-'));
   try {
     const res = await new Promise((resolveRun, reject) => {
@@ -71,7 +71,7 @@ test('MCP stdio JSON-RPC exposes all 8 tools and serves video_help cleanly', asy
     const messages = res.out.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
     assert.equal(messages.length, 3);
     assert.equal(messages[0]?.result?.serverInfo?.name, 'video-storyboard');
-    assert.equal(messages[0]?.result?.serverInfo?.version, '2.1.1');
+    assert.equal(messages[0]?.result?.serverInfo?.version, '2.2.0');
 
     const tools = messages[1]?.result?.tools || [];
     const expected = [
@@ -81,10 +81,13 @@ test('MCP stdio JSON-RPC exposes all 8 tools and serves video_help cleanly', asy
       'video_locate',
       'video_subtitles',
       'video_help',
+      'video_transcript',
       'video_clip',
       'video_cache_clean',
     ];
     assert.deepEqual(tools.map((t) => t.name), expected);
+    const sbSchema = tools.find((t) => t.name === 'video_storyboard')?.inputSchema;
+    assert.deepEqual(sbSchema?.properties?.preset?.enum, ['summary', 'lecture']);
     for (const tool of tools) {
       assert.equal(tool.inputSchema?.type, 'object');
       assert.equal(typeof tool.inputSchema?.properties, 'object');
@@ -194,6 +197,8 @@ test('built-in asr_server.py --mock auto-starts via asr-lifecycle, transcribes i
       import { callMcpTool } from ${JSON.stringify(`file://${join(REPO_ROOT, 'server', 'adapter.mjs').replace(/\\/g, '/')}`)};
       const sb = await callMcpTool('video_storyboard', { input: ${JSON.stringify(mp4Path)}, strategy: 'compact' }, { saveDir: ${JSON.stringify(join(cacheRoot, 'out'))} });
       const text = sb.content.filter((b) => b.type === 'text').map((b) => b.text).join('\\n');
+      const tr = await callMcpTool('video_transcript', { input: ${JSON.stringify(mp4Path)}, full: true });
+      const trText = tr.content.filter((b) => b.type === 'text').map((b) => b.text).join('\\n');
       const healthDuring = await fetch(${JSON.stringify(healthUrl)}).then((r) => r.status).catch(() => 0);
       const cleaned = await callMcpTool('video_cache_clean', { all: true, includeScanCache: true });
       let downAfterIdle = false;
@@ -202,7 +207,7 @@ test('built-in asr_server.py --mock auto-starts via asr-lifecycle, transcribes i
         const alive = await fetch(${JSON.stringify(healthUrl)}).then((r) => r.ok).catch(() => false);
         if (!alive) { downAfterIdle = true; break; }
       }
-      console.log(JSON.stringify({ text, imageCount: sb.savedImages.length, healthDuring, cleanedText: cleaned.content[0]?.text || '', downAfterIdle }));
+      console.log(JSON.stringify({ text, trText, imageCount: sb.savedImages.length, healthDuring, cleanedText: cleaned.content[0]?.text || '', downAfterIdle }));
     `;
 
     const { stdout } = await runFile(
@@ -224,6 +229,7 @@ test('built-in asr_server.py --mock auto-starts via asr-lifecycle, transcribes i
     assert.ok(result.imageCount >= 1);
     assert.equal(result.healthDuring, 200);
     assert.match(result.text, /mock local asr transcript/);
+    assert.match(result.trText, /mock local asr transcript/);
     assert.match(result.cleanedText, /Cleaned/);
     assert.equal(result.downAfterIdle, true, 'Expected managed asr_server.py to stop after idleMs');
   } finally {
@@ -391,4 +397,120 @@ test('directFromSummary and resolveDirectUrl fill canonical Bilibili Referer and
   assert.ok(dropped.includes('--no-continue'));
   assert.equal(dropped.filter((arg) => arg === '--add-header').length, 1);
   assert.equal(dropped.at(-1), 'https://b23.tv/mock456');
+});
+
+test('applyStoryboardPreset keeps summary minimal, fills lecture defaults, preserves explicit args, and rejects invalid preset', async () => {
+  const { applyStoryboardPreset } = await import(
+    `file://${join(REPO_ROOT, 'server', 'adapter.mjs').replace(/\\/g, '/')}`
+  );
+
+  assert.deepEqual(applyStoryboardPreset({ input: 'a.mp4' }), { input: 'a.mp4' });
+  assert.deepEqual(applyStoryboardPreset({ input: 'a.mp4', preset: 'summary' }), { input: 'a.mp4' });
+
+  const lecture = applyStoryboardPreset({ input: 'course.mp4', preset: 'lecture' });
+  assert.equal('preset' in lecture, false);
+  assert.equal(lecture.detail, 'high');
+  assert.equal(lecture.ocr, true);
+  assert.equal(lecture.quality, 'medium');
+
+  const overridden = applyStoryboardPreset({
+    input: 'course.mp4',
+    preset: 'lecture',
+    detail: 'low',
+    ocr: false,
+    scanHeight: 1080,
+  });
+  assert.equal(overridden.detail, 'low');
+  assert.equal(overridden.ocr, false);
+  assert.equal(overridden.scanHeight, 1080);
+  assert.equal(overridden.quality, undefined);
+
+  assert.throws(() => applyStoryboardPreset({ input: 'a.mp4', preset: 'invalid' }), RangeError);
+});
+
+test('video_transcript returns untruncated text, auto-pages >30m lectures, saves .md file, and cleans up', async () => {
+  const tmpDir = await mkdtemp(join(tmpdir(), 'vs-transcript-test-'));
+  try {
+    const cacheRoot = join(tmpDir, 'vcache');
+    await mkdir(cacheRoot, { recursive: true });
+    const srtPath = join(tmpDir, 'long_lecture.srt');
+    const longLine = `LectureSegmentOne-${'A'.repeat(540)}-END1`;
+    const midLine = `MiddleTopic-${'B'.repeat(50)}`;
+    const lateLine = `LateSectionAt2500s-${'C'.repeat(40)}`;
+    await writeFile(
+      srtPath,
+      [
+        '1',
+        '00:00:01,000 --> 00:00:15,000',
+        longLine,
+        '',
+        '2',
+        '00:10:00,000 --> 00:10:20,000',
+        midLine,
+        '',
+        '3',
+        '00:35:00,000 --> 00:41:40,000',
+        lateLine,
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const adapterUrl = `file://${join(REPO_ROOT, 'server', 'adapter.mjs').replace(/\\/g, '/')}`;
+    const childScript = `
+      import { callMcpTool } from ${JSON.stringify(adapterUrl)};
+      const paged = await callMcpTool('video_transcript', {
+        input: ${JSON.stringify(join(tmpDir, 'lecture.mp4'))},
+        transcriptFile: ${JSON.stringify(srtPath)},
+      });
+      const pagedText = paged.content.filter((b) => b.type === 'text').map((b) => b.text).join('\\n');
+
+      const fullRes = await callMcpTool('video_transcript', {
+        input: ${JSON.stringify(join(tmpDir, 'lecture.mp4'))},
+        transcriptFile: ${JSON.stringify(srtPath)},
+        full: true,
+        format: 'plain',
+        saveFile: true,
+      });
+      const fullText = fullRes.content.filter((b) => b.type === 'text').map((b) => b.text).join('\\n');
+      const m = fullText.match(/Saved file:\\*\\* \`([^\`]+)\`/);
+      const savedPath = m ? m[1] : null;
+      const fs = await import('node:fs');
+      const existedBeforeClean = Boolean(savedPath && fs.existsSync(savedPath));
+
+      const cleaned = await callMcpTool('video_cache_clean', {
+        input: ${JSON.stringify(join(tmpDir, 'lecture.mp4'))},
+      });
+      const cleanedText = cleaned.content.filter((b) => b.type === 'text').map((b) => b.text).join('\\n');
+      console.log(JSON.stringify({ pagedText, fullText, savedPath, existedBeforeClean, cleanedText }));
+    `;
+
+    const { stdout } = await runFile(
+      process.execPath,
+      ['--input-type=module', '-e', childScript],
+      {
+        env: {
+          ...process.env,
+          VIDEO_STORYBOARD_CACHE_DIR: cacheRoot,
+        },
+        timeout: 30_000,
+        windowsHide: true,
+      },
+    );
+
+    const out = JSON.parse(stdout);
+    assert.ok(out.pagedText.includes(longLine), 'Expected untruncated >500-char segment');
+    assert.equal(out.pagedText.includes('…'), false, 'Transcript must not truncate with ellipsis');
+    assert.equal(out.pagedText.includes(lateLine), false, 'Auto-paged 0..1200s window should exclude 2500s segment');
+    assert.match(out.pagedText, /Next window: call `video_transcript` with `from: 1200, segment: 1200`/);
+
+    assert.ok(out.fullText.includes(longLine));
+    assert.ok(out.fullText.includes(lateLine));
+    assert.ok(out.savedPath && out.savedPath.endsWith('_full.md'));
+    assert.equal(out.existedBeforeClean, true, 'Expected saveFile=true to create transcript .md before cleanup');
+    assert.equal(existsSync(out.savedPath), false, 'Expected video_cache_clean to delete saved transcript .md');
+    assert.match(out.cleanedText, /transcripts\//);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  }
 });

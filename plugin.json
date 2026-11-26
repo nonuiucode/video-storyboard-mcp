@@ -1,8 +1,8 @@
 {
   "name": "video-storyboard",
   "displayName": "Video Storyboard",
-  "version": "2.1.1",
-  "description": "Scene-aware video storyboard plugin & MCP server built on SAOS-3624/dsh-video-storyboard (v0.7.6, Apache-2.0): variable 1/1..1/8 DP row-packed grids, built-in offline sherpa-onnx ASR lifecycle, targeted OCR, video_clip, and video_cache_clean.",
+  "version": "2.2.0",
+  "description": "Scene-aware video storyboard plugin & MCP server built on SAOS-3624/dsh-video-storyboard (v0.7.6, Apache-2.0): summary vs lecture profiles, untruncated video_transcript for long courses, 1/1..1/8 DP grids, offline sherpa-onnx ASR, targeted OCR, video_clip, and video_cache_clean.",
   "logo": "assets/logo.svg",
   "author": {
     "name": "nonuiucode",
@@ -12,7 +12,7 @@
   "repository": "https://github.com/nonuiucode/video-storyboard-mcp",
   "suggestedPrompts": [
     "Probe this video URL or local file first and summarize its duration and streams",
-    "Watch this video with video_storyboard, zoom any dense cell if needed, and clean the cache afterward",
-    "Find where a phrase is spoken with video_locate, or export an audio/video snippet with video_clip"
+    "Summarize this video with default preset (summary) and clean the cache afterward",
+    "Take complete lecture notes for a PDF using video_transcript, video_storyboard(preset=\"lecture\"), and video_zoom"
   ]
 }
